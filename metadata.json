@@ -1,0 +1,5 @@
+{
+  "name": "Wedding Sign-in Wall",
+  "description": "An interactive wedding sign-in application where guests can leave handwritten messages over their photos. The signed cards are then displayed in a live, animated gallery for everyone to enjoy.",
+  "requestFramePermissions": []
+}
