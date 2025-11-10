@@ -5,7 +5,7 @@ import { supabase } from '../supabaseClient';
 import { BACKEND_BASE_URL } from '../config';
 
 interface SignaturePageProps {
-  onExit: () => void;
+  onExit?: () => void;
 }
 
 const SignaturePage: React.FC<SignaturePageProps> = ({ onExit }) => {
@@ -222,9 +222,11 @@ const SignaturePage: React.FC<SignaturePageProps> = ({ onExit }) => {
       <div className="w-full h-screen flex flex-col items-center justify-center text-center p-8 bg-stone-100">
         <h1 className="font-serif text-4xl text-stone-800">Guest Signing Tablet</h1>
         <p className="mt-4 text-xl text-stone-500">Please wait for a staff member to send a photo.</p>
-        <button onClick={onExit} className="mt-8 px-6 py-3 bg-amber-700 text-white rounded-lg font-semibold hover:bg-amber-800 transition-colors">
-            Return to Home
-        </button>
+        {onExit && (
+            <button onClick={onExit} className="mt-8 px-6 py-3 bg-amber-700 text-white rounded-lg font-semibold hover:bg-amber-800 transition-colors">
+                Return to Home
+            </button>
+        )}
       </div>
     );
   }
@@ -247,11 +249,13 @@ const SignaturePage: React.FC<SignaturePageProps> = ({ onExit }) => {
 
   return (
     <div className="w-full h-screen flex flex-col items-center justify-center p-2 sm:p-4 bg-stone-900 overflow-hidden">
-        <div className="absolute top-4 left-4 z-20">
-            <button onClick={onExit} className="p-3 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/40 transition-colors">
-                <ArrowLeftIcon className="w-6 h-6" />
-            </button>
-        </div>
+        {onExit && (
+            <div className="absolute top-4 left-4 z-20">
+                <button onClick={onExit} className="p-3 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/40 transition-colors">
+                    <ArrowLeftIcon className="w-6 h-6" />
+                </button>
+            </div>
+        )}
 
         <div className="flex-grow flex flex-col items-center justify-center w-full max-w-6xl">
             <h1 className="font-serif text-2xl md:text-3xl text-white text-center mb-4 px-12">Leave a message for Jonathan &amp; Grace!</h1>
