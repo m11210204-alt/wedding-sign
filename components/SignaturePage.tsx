@@ -1,16 +1,17 @@
 import React, { useRef, useEffect, useState, MouseEvent, TouchEvent } from 'react';
 import { BrushColor } from '../types';
 import { EraserIcon, CheckIcon, ArrowLeftIcon, XIcon, RefreshCwIcon } from './icons';
+import { supabase } from '../supabaseClient';
+import { BACKEND_BASE_URL } from '../config';
 
 interface SignaturePageProps {
-  photoUrl: string | null;
-  onSignatureComplete: (signedCardUrl: string) => void;
   onExit: () => void;
 }
 
-const SignaturePage: React.FC<SignaturePageProps> = ({ photoUrl, onSignatureComplete, onExit }) => {
+const SignaturePage: React.FC<SignaturePageProps> = ({ onExit }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [brushColor, setBrushColor] = useState<BrushColor>('#292524');
   const [brushSize, setBrushSize] = useState(5);
@@ -18,20 +19,53 @@ const SignaturePage: React.FC<SignaturePageProps> = ({ photoUrl, onSignatureComp
   const [signedPreviewUrl, setSignedPreviewUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    // Reset preview when a new photo arrives
-    setSignedPreviewUrl(null);
+    // Fetch initial pending photo
+    const fetchPendingPhoto = async () => {
+        try {
+            const response = await fetch(`${BACKEND_BASE_URL}/photos/pending`);
+            if (response.ok) {
+                const data = await response.json();
+                if(data.url) {
+                    setPhotoUrl(data.url);
+                }
+            }
+        } catch (error) {
+            console.error("Error fetching initial photo:", error);
+        }
+    };
+    fetchPendingPhoto();
 
+    // Listen for real-time updates
+    const channel = supabase
+      .channel('pending_photo_updates')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'pending_photos' },
+        (payload) => {
+          setPhotoUrl(payload.new.url);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  useEffect(() => {
+    setSignedPreviewUrl(null);
+    clearCanvas();
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (canvas && container) {
       const resizeCanvas = () => {
-        canvas.width = container.offsetWidth;
-        canvas.height = container.offsetHeight;
+        if (container.offsetWidth > 0) {
+            canvas.width = container.offsetWidth;
+            canvas.height = container.offsetHeight;
+        }
       };
-      // Set timeout to allow layout to settle
       const timeoutId = setTimeout(resizeCanvas, 100);
       window.addEventListener('resize', resizeCanvas);
-      
       return () => {
         clearTimeout(timeoutId);
         window.removeEventListener('resize', resizeCanvas);
@@ -39,24 +73,21 @@ const SignaturePage: React.FC<SignaturePageProps> = ({ photoUrl, onSignatureComp
     }
   }, [photoUrl]);
 
-  const getCoords = (e: MouseEvent | TouchEvent): { x: number, y: number } | null => {
+  const getCoords = (e: MouseEvent | TouchEvent): { x: number; y: number } | null => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
-
     const rect = canvas.getBoundingClientRect();
     const touch = 'touches' in e ? e.touches[0] : null;
     const clientX = touch ? touch.clientX : (e as MouseEvent).clientX;
     const clientY = touch ? touch.clientY : (e as MouseEvent).clientY;
-
     return { x: clientX - rect.left, y: clientY - rect.top };
-  }
+  };
 
   const startDrawing = (e: MouseEvent | TouchEvent) => {
     e.preventDefault();
     const ctx = canvasRef.current?.getContext('2d');
     const coords = getCoords(e);
     if (!ctx || !coords) return;
-    
     ctx.beginPath();
     ctx.moveTo(coords.x, coords.y);
     setIsDrawing(true);
@@ -68,22 +99,17 @@ const SignaturePage: React.FC<SignaturePageProps> = ({ photoUrl, onSignatureComp
     const ctx = canvasRef.current?.getContext('2d');
     const coords = getCoords(e);
     if (!ctx || !coords) return;
-
     ctx.globalCompositeOperation = isErasing ? 'destination-out' : 'source-over';
     ctx.strokeStyle = brushColor;
     ctx.lineWidth = brushSize;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-
     ctx.lineTo(coords.x, coords.y);
     ctx.stroke();
   };
 
   const stopDrawing = () => {
-    const ctx = canvasRef.current?.getContext('2d');
-    if (ctx) {
-        ctx.closePath();
-    }
+    canvasRef.current?.getContext('2d')?.closePath();
     setIsDrawing(false);
   };
 
@@ -94,56 +120,90 @@ const SignaturePage: React.FC<SignaturePageProps> = ({ photoUrl, onSignatureComp
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
   };
-  
+
+  const dataUrlToBlob = (dataUrl: string): Blob => {
+    const arr = dataUrl.split(',');
+    const mimeMatch = arr[0].match(/:(.*?);/);
+    if (!mimeMatch) throw new Error("Invalid Data URL");
+    const mime = mimeMatch[1];
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while(n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new Blob([u8arr], {type: mime});
+  }
+
   const handleDone = () => {
     const canvas = canvasRef.current;
     const image = new Image();
+    image.crossOrigin = 'anonymous'; // Important for cross-origin images
     if (!canvas || !photoUrl) return;
     
     image.src = photoUrl;
     image.onload = () => {
       const tempCanvas = document.createElement('canvas');
-      
       const outputWidth = 1600;
       const outputHeight = 800;
       tempCanvas.width = outputWidth;
       tempCanvas.height = outputHeight;
-
       const tempCtx = tempCanvas.getContext('2d');
       if (tempCtx) {
-        // Fill background
         tempCtx.fillStyle = '#F8F5F2';
         tempCtx.fillRect(0, 0, outputWidth, outputHeight);
-
-        // Draw photo on the left
         const photoSize = 800;
         const imgAspect = image.width / image.height;
         let sx = 0, sy = 0, sWidth = image.width, sHeight = image.height;
-
-        if (imgAspect > 1) { // wider than square
+        if (imgAspect > 1) {
           sWidth = image.height;
           sx = (image.width - sWidth) / 2;
-        } else { // taller than square
+        } else {
           sHeight = image.width;
           sy = (image.height - sHeight) / 2;
         }
         tempCtx.drawImage(image, sx, sy, sWidth, sHeight, 0, 0, photoSize, photoSize);
-        
-        // Draw signature on the right
         tempCtx.drawImage(canvas, photoSize, 0, photoSize, photoSize);
-        
         const signedCardUrl = tempCanvas.toDataURL('image/jpeg', 0.9);
         setSignedPreviewUrl(signedCardUrl);
       }
     };
+    image.onerror = () => {
+        alert("Could not load the guest photo. Please try again. This may be a CORS issue if running locally.")
+    }
   };
 
-  const handleNextGuest = () => {
-    if (signedPreviewUrl) {
-      onSignatureComplete(signedPreviewUrl);
+  const handleNextGuest = async () => {
+    if (!signedPreviewUrl) return;
+
+    try {
+        const blob = dataUrlToBlob(signedPreviewUrl);
+        const fileName = `signed-card-${Date.now()}.jpg`;
+
+        const { error: uploadError } = await supabase.storage
+            .from('guest-cards')
+            .upload(fileName, blob);
+        if (uploadError) throw uploadError;
+
+        const { data: { publicUrl } } = supabase.storage
+            .from('guest-cards')
+            .getPublicUrl(fileName);
+
+        await fetch(`${BACKEND_BASE_URL}/cards`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageUrl: publicUrl })
+        });
+
+        // This also implicitly clears the pending photo on the backend
+    } catch (error) {
+        console.error("Failed to complete signature process:", error);
+        alert("Failed to save signature. Please try again.");
+    } finally {
+        setSignedPreviewUrl(null);
+        setPhotoUrl(null); // Clear photo for next guest
+        clearCanvas();
     }
-    setSignedPreviewUrl(null);
-    clearCanvas();
   };
 
   const selectBrush = (color: BrushColor) => {
@@ -196,22 +256,16 @@ const SignaturePage: React.FC<SignaturePageProps> = ({ photoUrl, onSignatureComp
         <div className="flex-grow flex flex-col items-center justify-center w-full max-w-6xl">
             <h1 className="font-serif text-2xl md:text-3xl text-white text-center mb-4 px-12">Leave a message for Jonathan &amp; Grace!</h1>
             <div className="flex flex-col md:flex-row items-center justify-center gap-4 w-full">
-              {/* Photo Side */}
               <div className="w-full max-w-md md:w-1/2 aspect-square rounded-lg overflow-hidden bg-stone-800 shadow-xl">
-                 <img src={photoUrl} alt="Guest" className="w-full h-full object-cover" />
+                 <img src={photoUrl} alt="Guest" className="w-full h-full object-cover" crossOrigin="anonymous" />
               </div>
 
-              {/* Canvas Side */}
               <div ref={containerRef} className="w-full max-w-md md:w-1/2 aspect-square rounded-lg overflow-hidden shadow-xl bg-white relative">
                  <canvas
                     ref={canvasRef}
                     className="absolute top-0 left-0 w-full h-full cursor-crosshair touch-none"
-                    onMouseDown={startDrawing}
-                    onMouseMove={draw}
-                    onMouseUp={stopDrawing}
-                    onMouseLeave={stopDrawing}
-                    onTouchStart={startDrawing}
-                    onTouchMove={draw}
+                    onMouseDown={startDrawing} onMouseMove={draw} onMouseUp={stopDrawing}
+                    onMouseLeave={stopDrawing} onTouchStart={startDrawing} onTouchMove={draw}
                     onTouchEnd={stopDrawing}
                 />
               </div>

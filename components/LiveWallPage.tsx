@@ -1,14 +1,50 @@
-import React, { useState, useCallback, KeyboardEvent } from 'react';
+import React, { useState, useCallback, KeyboardEvent, useEffect } from 'react';
 import { GuestCard } from '../types';
 import { ArrowLeftIcon, XIcon, ChevronLeftIcon, ChevronRightIcon } from './icons';
+import { supabase } from '../supabaseClient';
+import { BACKEND_BASE_URL } from '../config';
 
 interface LiveWallPageProps {
-  cards: GuestCard[];
   onExit: () => void;
 }
 
-const LiveWallPage: React.FC<LiveWallPageProps> = ({ cards, onExit }) => {
+const LiveWallPage: React.FC<LiveWallPageProps> = ({ onExit }) => {
+    const [cards, setCards] = useState<GuestCard[]>([]);
     const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
+
+    useEffect(() => {
+        const fetchInitialCards = async () => {
+            try {
+                const response = await fetch(`${BACKEND_BASE_URL}/cards`);
+                if (response.ok) {
+                    const data = await response.json();
+                    setCards(data);
+                } else {
+                    console.error("Failed to fetch initial cards");
+                }
+            } catch (error) {
+                console.error("Error fetching cards:", error);
+            }
+        };
+
+        fetchInitialCards();
+
+        const channel = supabase
+            .channel('guest_card_updates')
+            .on(
+                'postgres_changes',
+                { event: 'INSERT', schema: 'public', table: 'guest_cards' },
+                (payload) => {
+                    // Add the new card to the top of the list
+                    setCards(prevCards => [payload.new as GuestCard, ...prevCards]);
+                }
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, []);
 
     const openModal = (index: number) => {
         setSelectedImageIndex(index);
@@ -31,13 +67,9 @@ const LiveWallPage: React.FC<LiveWallPageProps> = ({ cards, onExit }) => {
     }, [selectedImageIndex, cards.length]);
     
     const handleKeyDown = useCallback((e: KeyboardEvent) => {
-        if (e.key === 'ArrowRight') {
-            showNextImage();
-        } else if (e.key === 'ArrowLeft') {
-            showPrevImage();
-        } else if (e.key === 'Escape') {
-            closeModal();
-        }
+        if (e.key === 'ArrowRight') showNextImage();
+        else if (e.key === 'ArrowLeft') showPrevImage();
+        else if (e.key === 'Escape') closeModal();
     }, [showNextImage, showPrevImage]);
 
     return (
@@ -49,7 +81,7 @@ const LiveWallPage: React.FC<LiveWallPageProps> = ({ cards, onExit }) => {
                 <h1 className="font-serif text-3xl md:text-4xl text-stone-800 text-center flex-grow">
                     Jonathan &amp; Grace's Guestbook
                 </h1>
-                <div className="w-12 h-12"></div> {/* Spacer to balance the back button */}
+                <div className="w-12 h-12"></div>
             </header>
             
             <div className="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4">
@@ -69,9 +101,7 @@ const LiveWallPage: React.FC<LiveWallPageProps> = ({ cards, onExit }) => {
                     className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4" 
                     onClick={closeModal}
                     onKeyDown={handleKeyDown}
-                    tabIndex={-1}
-                    role="dialog"
-                    aria-modal="true"
+                    tabIndex={-1} role="dialog" aria-modal="true"
                     ref={node => node?.focus()}
                 >
                     <div className="relative w-full h-full max-w-4xl max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
